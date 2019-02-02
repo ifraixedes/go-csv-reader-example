@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// ErrInvalidTime can be returned in csv.ParseError.Err
+var ErrInvalidTime = errors.New("Invalid format time")
+
 // Reader is the interface with only the methods of csv.Reader which are used
 // by this package
 type Reader interface {
@@ -17,6 +20,7 @@ type timeWindowReader struct {
 	from   time.Time
 	to     time.Time
 	tField uint32
+	rowIdx uint64
 }
 
 // NewTimeWindowReader returns a Reader whose Read method only returns the
@@ -41,7 +45,35 @@ func NewTimeWindowReader(r *csv.Reader, from time.Time, to time.Time) (Reader, e
 	}, nil
 }
 
-func (_ *timeWindodReader) Read() ([]string, error) {
-	// TODO: WIP
-	return nil, nil
+// Read reads the csv.Reader records one by one, returning on each call the one
+// that is inside of the configured time window, until csv.Reader has no more
+// data.
+// It behaves as csv.Reader.Read but also it returns ErrInvalidTime error
+// if the field which  must contain the time under filtering isn't of the
+// expected format.
+func (twr *timeWindowReader) Read() ([]string, error) {
+	for {
+		var rc, err = twr.r.Read()
+		if err != nil {
+			return nil, err
+		}
+
+		tm, err := time.Parse(time.RFC3339, rc[twr.tField])
+		if err != nil {
+			_, _ = twr.r.ReadAll()
+			return nil, &csv.ParseError{
+				Line:   int(twr.rowIdx) + 1,
+				Column: int(twr.tField),
+				Err:    ErrInvalidTime,
+			}
+		}
+
+		twr.rowIdx++
+
+		if tm.Before(twr.from) || tm.After(twr.to) {
+			continue
+		}
+
+		return rc, nil
+	}
 }
